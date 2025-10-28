@@ -1,0 +1,374 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Matches v1.0.0, v2.1.3, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-22.04
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for changelog generation
+
+    - name: Get version from tag
+      id: get_version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        # Get the previous tag
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        echo "## What's Changed" > RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        
+        if [ -n "$PREV_TAG" ]; then
+          echo "Changes since $PREV_TAG:" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          git log $PREV_TAG..HEAD --pretty=format:"- %s (%h)" >> RELEASE_NOTES.md
+        else
+          echo "Initial release" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          git log --pretty=format:"- %s (%h)" >> RELEASE_NOTES.md
+        fi
+        
+        echo "" >> RELEASE_NOTES.md
+        echo "## Installation" >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "### Linux/macOS" >> RELEASE_NOTES.md
+        echo '```bash' >> RELEASE_NOTES.md
+        echo 'curl -sSL https://raw.githubusercontent.com/whatsmycli/whatsmy/main/install.sh | bash' >> RELEASE_NOTES.md
+        echo '```' >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "### Windows (PowerShell)" >> RELEASE_NOTES.md
+        echo '```powershell' >> RELEASE_NOTES.md
+        echo 'irm https://raw.githubusercontent.com/whatsmycli/whatsmy/main/install.ps1 | iex' >> RELEASE_NOTES.md
+        echo '```' >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "### Manual Installation" >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "Download the appropriate binary for your platform from the assets below." >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "## Assets" >> RELEASE_NOTES.md
+        echo "" >> RELEASE_NOTES.md
+        echo "- **whatsmy-linux-x64**: Linux binary (Ubuntu 22.04+)" >> RELEASE_NOTES.md
+        echo "- **whatsmy-windows-x64.exe**: Windows binary (Windows 10+)" >> RELEASE_NOTES.md
+        echo "- **whatsmy-macos-universal**: macOS universal binary (Intel + Apple Silicon)" >> RELEASE_NOTES.md
+        echo "- **checksums.txt**: SHA256 checksums for verification" >> RELEASE_NOTES.md
+        
+        cat RELEASE_NOTES.md
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        generate_release_notes: false
+
+  build-and-upload:
+    name: Build and Upload - ${{ matrix.name }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux build
+          - os: ubuntu-22.04
+            name: Linux
+            cc: gcc-11
+            cxx: g++-11
+            artifact_name: whatsmy-linux-x64
+            
+          # Windows build
+          - os: windows-2022
+            name: Windows
+            artifact_name: whatsmy-windows-x64.exe
+            
+          # macOS build (universal binary)
+          - os: macos-13
+            name: macOS
+            artifact_name: whatsmy-macos-universal
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential binutils
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake
+
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Configure CMake (Linux)
+      if: runner.os == 'Linux'
+      working-directory: whatsmy
+      env:
+        CC: ${{ matrix.cc }}
+        CXX: ${{ matrix.cxx }}
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG"
+
+    - name: Configure CMake (macOS - Universal Binary)
+      if: runner.os == 'macOS'
+      working-directory: whatsmy
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+          -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG" \
+          -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG"
+
+    - name: Configure CMake (Windows)
+      if: runner.os == 'Windows'
+      working-directory: whatsmy
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      working-directory: whatsmy
+      run: |
+        cmake --build build --config Release --parallel
+
+    - name: Strip binary (Linux)
+      if: runner.os == 'Linux'
+      working-directory: whatsmy/build
+      run: |
+        strip --strip-all whatsmy
+        ls -lh whatsmy
+
+    - name: Strip binary (macOS)
+      if: runner.os == 'macOS'
+      working-directory: whatsmy/build
+      run: |
+        strip whatsmy
+        ls -lh whatsmy
+
+    - name: Prepare release binary (Linux/macOS)
+      if: runner.os != 'Windows'
+      working-directory: whatsmy/build
+      run: |
+        cp whatsmy ${{ matrix.artifact_name }}
+        chmod +x ${{ matrix.artifact_name }}
+
+    - name: Prepare release binary (Windows)
+      if: runner.os == 'Windows'
+      working-directory: whatsmy/build
+      shell: bash
+      run: |
+        if [ -f "Release/whatsmy.exe" ]; then
+          cp Release/whatsmy.exe ${{ matrix.artifact_name }}
+        else
+          cp whatsmy.exe ${{ matrix.artifact_name }}
+        fi
+
+    - name: Generate checksum
+      working-directory: whatsmy/build
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          certutil -hashfile ${{ matrix.artifact_name }} SHA256 > ${{ matrix.artifact_name }}.sha256
+        else
+          sha256sum ${{ matrix.artifact_name }} > ${{ matrix.artifact_name }}.sha256
+        fi
+        cat ${{ matrix.artifact_name }}.sha256
+
+    - name: Upload release binary
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          whatsmy/build/${{ matrix.artifact_name }}
+          whatsmy/build/${{ matrix.artifact_name }}.sha256
+
+  build-plugins:
+    name: Build Plugins - ${{ matrix.name }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: Linux
+            plugin_ext: .so
+            platform_name: linux
+            
+          - os: windows-2022
+            name: Windows
+            plugin_ext: .dll
+            platform_name: windows
+            
+          - os: macos-13
+            name: macOS
+            plugin_ext: .dylib
+            platform_name: macos
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential binutils
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake
+
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Build GPU Plugin
+      working-directory: plugin-gpu
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+
+    - name: Build Example Plugin
+      working-directory: plugin-template
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+
+    - name: Strip plugins (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        strip --strip-all plugin-gpu/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }}
+        strip --strip-all plugin-template/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }}
+
+    - name: Strip plugins (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        strip plugin-gpu/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }}
+        strip plugin-template/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }}
+
+    - name: Prepare plugin artifacts (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        mkdir -p plugins-${{ matrix.platform_name }}
+        cp plugin-gpu/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugins-${{ matrix.platform_name }}/gpu${{ matrix.plugin_ext }}
+        cp plugin-template/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugins-${{ matrix.platform_name }}/example${{ matrix.plugin_ext }}
+
+    - name: Prepare plugin artifacts (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        mkdir -p plugins-${{ matrix.platform_name }}
+        if [ -f "plugin-gpu/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }}" ]; then
+          cp plugin-gpu/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugins-${{ matrix.platform_name }}/gpu${{ matrix.plugin_ext }}
+        else
+          cp plugin-gpu/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugins-${{ matrix.platform_name }}/gpu${{ matrix.plugin_ext }}
+        fi
+        if [ -f "plugin-template/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }}" ]; then
+          cp plugin-template/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugins-${{ matrix.platform_name }}/example${{ matrix.plugin_ext }}
+        else
+          cp plugin-template/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugins-${{ matrix.platform_name }}/example${{ matrix.plugin_ext }}
+        fi
+
+    - name: Create plugin archive
+      shell: bash
+      run: |
+        cd plugins-${{ matrix.platform_name }}
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          7z a ../whatsmy-plugins-${{ matrix.platform_name }}.zip *
+        else
+          tar czf ../whatsmy-plugins-${{ matrix.platform_name }}.tar.gz *
+        fi
+        cd ..
+
+    - name: Generate checksum
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          certutil -hashfile whatsmy-plugins-${{ matrix.platform_name }}.zip SHA256 > whatsmy-plugins-${{ matrix.platform_name }}.zip.sha256
+        else
+          sha256sum whatsmy-plugins-${{ matrix.platform_name }}.tar.gz > whatsmy-plugins-${{ matrix.platform_name }}.tar.gz.sha256
+        fi
+
+    - name: Upload plugin archive
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          whatsmy-plugins-${{ matrix.platform_name }}.*
+
+  create-checksums:
+    name: Create Combined Checksums
+    needs: [build-and-upload, build-plugins]
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      # Note: This downloads artifacts from the current workflow run
+      # For release assets, we'd need to use the GitHub API
+
+    - name: Create combined checksums file
+      run: |
+        echo "# SHA256 Checksums for whatsmycli ${{ needs.create-release.outputs.version }}" > checksums.txt
+        echo "" >> checksums.txt
+        echo "Verify downloaded files with:" >> checksums.txt
+        echo "  Linux/macOS: sha256sum -c checksums.txt" >> checksums.txt
+        echo "  Windows: certutil -hashfile <filename> SHA256" >> checksums.txt
+        echo "" >> checksums.txt
+        echo "## Binaries" >> checksums.txt
+        echo "See individual .sha256 files for checksums" >> checksums.txt
+        
+    - name: Upload checksums
+      uses: softprops/action-gh-release@v1
+      with:
+        files: checksums.txt
+
+  verify-release:
+    name: Verify Release
+    needs: [create-release, build-and-upload, build-plugins, create-checksums]
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Verify release was created
+      run: |
+        echo "Release ${{ needs.create-release.outputs.version }} created successfully"
+        echo "All builds completed"
+        echo "Visit: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}"
+

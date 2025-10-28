@@ -1,0 +1,286 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - os: ubuntu-22.04
+            name: Linux (GCC)
+            cc: gcc-11
+            cxx: g++-11
+            artifact_name: whatsmy-linux-x64
+            
+          - os: ubuntu-22.04
+            name: Linux (Clang)
+            cc: clang-14
+            cxx: clang++-14
+            artifact_name: whatsmy-linux-x64-clang
+            
+          # Windows builds
+          - os: windows-2022
+            name: Windows (MSVC)
+            artifact_name: whatsmy-windows-x64.exe
+            
+          # macOS builds
+          - os: macos-13
+            name: macOS (Universal)
+            artifact_name: whatsmy-macos-universal
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake
+
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Configure CMake (Linux/macOS)
+      if: runner.os != 'Windows'
+      working-directory: whatsmy
+      env:
+        CC: ${{ matrix.cc }}
+        CXX: ${{ matrix.cxx }}
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Configure CMake (macOS - Universal Binary)
+      if: runner.os == 'macOS'
+      working-directory: whatsmy
+      run: |
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+    - name: Configure CMake (Windows)
+      if: runner.os == 'Windows'
+      working-directory: whatsmy
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      working-directory: whatsmy
+      run: |
+        cmake --build build --config Release --parallel
+
+    - name: Run tests
+      if: false  # Enable when tests are implemented
+      working-directory: whatsmy/build
+      run: |
+        ctest --config Release --output-on-failure
+
+    - name: List build artifacts (Debug)
+      working-directory: whatsmy/build
+      shell: bash
+      run: |
+        echo "=== Build directory contents ==="
+        ls -lah
+        if [ -f "whatsmy" ]; then
+          echo "=== whatsmy binary info ==="
+          file whatsmy
+          ls -lh whatsmy
+        fi
+        if [ -f "whatsmy.exe" ]; then
+          echo "=== whatsmy.exe binary info ==="
+          ls -lh whatsmy.exe
+        fi
+        if [ -f "Release/whatsmy.exe" ]; then
+          echo "=== Release/whatsmy.exe binary info ==="
+          ls -lh Release/whatsmy.exe
+        fi
+
+    - name: Prepare artifacts (Linux)
+      if: runner.os == 'Linux'
+      working-directory: whatsmy/build
+      run: |
+        strip whatsmy
+        cp whatsmy ${{ matrix.artifact_name }}
+
+    - name: Prepare artifacts (macOS)
+      if: runner.os == 'macOS'
+      working-directory: whatsmy/build
+      run: |
+        strip whatsmy
+        cp whatsmy ${{ matrix.artifact_name }}
+
+    - name: Prepare artifacts (Windows)
+      if: runner.os == 'Windows'
+      working-directory: whatsmy/build
+      shell: bash
+      run: |
+        # MSVC puts binaries in Release/ subdirectory
+        if [ -f "Release/whatsmy.exe" ]; then
+          cp Release/whatsmy.exe ${{ matrix.artifact_name }}
+        else
+          cp whatsmy.exe ${{ matrix.artifact_name }}
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: whatsmy/build/${{ matrix.artifact_name }}
+        retention-days: 7
+
+    - name: Test binary execution
+      working-directory: whatsmy/build
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          ./${{ matrix.artifact_name }} version
+          ./${{ matrix.artifact_name }} help
+        else
+          ./${{ matrix.artifact_name }} version
+          ./${{ matrix.artifact_name }} help
+        fi
+
+  build-plugins:
+    name: Build Plugins on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            plugin_ext: .so
+            platform_name: linux
+            
+          - os: windows-2022
+            plugin_ext: .dll
+            platform_name: windows
+            
+          - os: macos-13
+            plugin_ext: .dylib
+            platform_name: macos
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake
+
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Build GPU Plugin
+      working-directory: plugin-gpu
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+
+    - name: Build Example Plugin
+      working-directory: plugin-template
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release
+
+    - name: Prepare plugin artifacts (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        mkdir -p plugin-artifacts/gpu
+        mkdir -p plugin-artifacts/example
+        cp plugin-gpu/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugin-artifacts/gpu/
+        cp plugin-template/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugin-artifacts/example/
+
+    - name: Prepare plugin artifacts (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        mkdir -p plugin-artifacts/gpu
+        mkdir -p plugin-artifacts/example
+        # MSVC puts DLLs in Release/ subdirectory
+        if [ -f "plugin-gpu/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }}" ]; then
+          cp plugin-gpu/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugin-artifacts/gpu/
+        else
+          cp plugin-gpu/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugin-artifacts/gpu/
+        fi
+        if [ -f "plugin-template/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }}" ]; then
+          cp plugin-template/build/Release/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugin-artifacts/example/
+        else
+          cp plugin-template/build/${{ matrix.platform_name }}${{ matrix.plugin_ext }} plugin-artifacts/example/
+        fi
+
+    - name: Upload plugin artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: plugins-${{ matrix.platform_name }}
+        path: plugin-artifacts/
+        retention-days: 7
+
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-format-14
+
+    # TODO: Add clang-format check when .clang-format is created
+    # - name: Check code formatting
+    #   run: |
+    #     find whatsmy/src whatsmy/include -name '*.cpp' -o -name '*.h' | \
+    #       xargs clang-format-14 --dry-run --Werror
+
+    - name: Check for TODOs and FIXMEs
+      run: |
+        echo "=== Checking for TODOs and FIXMEs ==="
+        if grep -r "TODO\|FIXME" whatsmy/src whatsmy/include --color=always; then
+          echo "Found TODO/FIXME items (informational only)"
+        else
+          echo "No TODO/FIXME items found"
+        fi
+
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-22.04
+    needs: [build, build-plugins]
+    if: always()
+    
+    steps:
+    - name: Check build results
+      run: |
+        echo "Build workflow completed"
+        echo "Main build result: ${{ needs.build.result }}"
+        echo "Plugin build result: ${{ needs.build-plugins.result }}"
+
