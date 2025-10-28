@@ -23,6 +23,19 @@ Tired of remembering different commands for different system information? `lspci
 - **Open source** - all plugins must be GPLv3-compatible
 - **Easy to contribute** - well-documented, clean codebase
 
+## FAQ
+**Q: How is this different from neofetch/screenfetch?**  
+A: Those are primarily for displaying system info visually. `whatsmy` is designed for quick queries and extensibility through plugins.
+
+**Q: Can I use this in scripts?**  
+A: Yes! `whatsmy` is designed to be script-friendly with clean output and proper exit codes.
+
+**Q: How do I request a new built-in command?**  
+A: Open an issue on GitHub describing what information you'd like to query. Alternatively, create it as a plugin first!
+
+**Q: Are plugins safe?**  
+A: All plugins in the official repository are open-source and verified by maintainers.
+
 ## Quick Start
 
 ### Installation
