@@ -1,4 +1,4 @@
-![Banner](https://raw.githubusercontent.com/whatsmycli/whatsmycli/main/.github/profile/banner.png)
+![Banner](https://raw.githubusercontent.com/whatsmycli/.github/refs/heads/main/profile/banner.png)
 
 > Fast, minimal, and extensible cross-platform system information CLI
 
