@@ -43,7 +43,7 @@ whatsmycli focuses on **querying specific information** rather than displaying a
 
 ## Organization
 
-The **whatsmycli** organization consists of four repositories:
+The **whatsmycli** organization consists of three repositories:
 
 ### [whatsmy](https://github.com/whatsmycli/whatsmy)
 Main CLI application. Loads and executes plugins.
@@ -53,6 +53,3 @@ Community plugin repository. Verified binaries for Linux, Windows, and macOS.
 
 ### [plugin-template](https://github.com/whatsmycli/plugin-template)
 Template for creating your own plugins. Write your first plugin in under 10 minutes.
-
-### [docs](https://github.com/whatsmycli/docs)
-Complete documentation including plugin API reference and architecture guides.
